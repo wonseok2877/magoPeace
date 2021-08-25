@@ -1,25 +1,21 @@
 from django.urls import path
 
 from restaurants.views import (
-    PopularRestaurantView,
     RestaurantDetailView,
+    SubCategoriesView,
     WishListView,
-    SubCategoryListView,
     RestaurantFoodsView,
+    RestaurantReviewsView,
     RestaurantReviewView,
-    ReviewView,
-    RestaurantView,
-    FilteringView
+    RestaurantsView,
 )
 
 urlpatterns = [
-    path("/<int:restaurant_id>/foods", RestaurantFoodsView.as_view()),
+    path("", RestaurantsView.as_view()),
+    path("/subCategory", SubCategoriesView.as_view()),
     path("/<int:restaurant_id>", RestaurantDetailView.as_view()),  
-    path("/banner-list", SubCategoryListView.as_view()),
+    path("/<int:restaurant_id>/foods", RestaurantFoodsView.as_view()),
     path("/<int:restaurant_id>/wishlist", WishListView.as_view()),
-    path("/<int:restaurant_id>/review/<int:review_id>", ReviewView.as_view()),  
-    path("/<int:restaurant_id>/reviews", RestaurantReviewView.as_view()),
-    path("", RestaurantView.as_view()),
-    path("/popular", PopularRestaurantView.as_view()),
-    path("/search", FilteringView.as_view()),
+    path("/<int:restaurant_id>/reviews", RestaurantReviewsView.as_view()),
+    path("/<int:restaurant_id>/review/<int:review_id>", RestaurantReviewView.as_view()),  
 ]
