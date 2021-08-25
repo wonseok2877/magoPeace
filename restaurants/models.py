@@ -1,53 +1,67 @@
-from django.db.models.base           import Model
-from django.db.models.deletion       import CASCADE, PROTECT
-from django.db.models.fields         import CharField, DateTimeField, DecimalField, URLField
-from django.db.models.fields.json    import JSONField
-from django.db.models.fields.related import ForeignKey
+from django.db import models
 
-from mangoPeace.common               import TimeStampModel
+from mangoPeace.common import TimeStampModel
 
-class Menu(Model):
-    name = CharField(max_length=45, unique=True)
+class Menu(models.Model):
+    name = models.CharField(max_length=45, unique=True)
 
     class Meta():
         db_table = "menus"
 
-class Category(Model):
-    menu = ForeignKey(Menu, on_delete=PROTECT, related_name="categories")
-    name = CharField(max_length=45, unique=True)
+    def __str__(self):
+        return self.name
+
+class Category(models.Model):
+    menu = models.ForeignKey(Menu, on_delete=models.PROTECT, related_name="categories")
+    name = models.CharField(max_length=45, unique=True)
 
     class Meta():
         db_table = "categories"
 
-class SubCategory(Model):
-    category = ForeignKey(Category, on_delete=PROTECT, related_name="sub_category")
-    name     = CharField(max_length=45, unique=True)
+    def __str__(self):
+        return self.name
+
+class SubCategory(models.Model):
+    category = models.ForeignKey(Category, on_delete=models.PROTECT, related_name="sub_category")
+    name     = models.CharField(max_length=45, unique=True)
 
     class Meta():
         db_table = "sub_categories"
 
+    def __str__(self):
+        return self.name
+
 class Restaurant(TimeStampModel):
-    sub_category = ForeignKey(SubCategory, on_delete=PROTECT, related_name="restaurant")
-    name         = CharField(max_length=45)
-    address      = CharField(max_length=200, unique=True)
-    phone_number = CharField(max_length=20, unique=True)
-    coordinate   = JSONField()
-    open_time    = CharField(max_length=100)
+    sub_category = models.ForeignKey(SubCategory, on_delete=models.PROTECT, related_name="restaurant")
+    name         = models.CharField(max_length=45)
+    address      = models.CharField(max_length=200, unique=True)
+    phone_number = models.CharField(max_length=20, unique=True)
+    coordinate   = models.JSONField()
+    open_time    = models.CharField(max_length=100)
 
     class Meta():
         db_table = "restaurants"
 
+    def __str__(self):
+        return self.name
+
 class Food(TimeStampModel):
-    restaurant = ForeignKey(Restaurant, on_delete=CASCADE, related_name="foods")
-    name       = CharField(max_length=45)
-    price      = DecimalField(max_digits=10, decimal_places=2)
+    restaurant = models.ForeignKey(Restaurant, on_delete=models.CASCADE, related_name="foods")
+    name       = models.CharField(max_length=45)
+    price      = models.DecimalField(max_digits=10, decimal_places=2)
 
     class Meta():
         db_table = "foods"
 
-class Image(Model):
-    food      = ForeignKey(Food, on_delete=CASCADE, related_name="images")
-    image_url = URLField(max_length=2000)
+    def __str__(self):
+        return self.name
+
+class Image(models.Model):
+    food      = models.ForeignKey(Food, on_delete=models.CASCADE, related_name="images")
+    image_url = models.URLField(max_length=2000)
 
     class Meta():
         db_table = "food_images"
+
+    def __str__(self):
+        return f"({self.pk}) at {self.food.name}"

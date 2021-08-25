@@ -1,55 +1,30 @@
 import json
 
-from django.http        import JsonResponse
-from django.views       import View
-from django.db.utils    import DataError
-from django.db.models   import Avg, Q, Count
-from django.utils       import timezone
+from json.decoder           import JSONDecodeError
+from django.db.models.query import Prefetch
+from django.http            import JsonResponse
+from django.views           import View
+from django.db.utils        import DataError
+from django.db.models       import Avg, Q, Count
+from django.utils           import timezone
 
-from restaurants.models import Restaurant, Food, SubCategory, Image
-from users.utils        import ConfirmUser, LooseConfirmUser
-from users.models       import Review
-
-class PopularRestaurantView(View):
-    def get(self, request):
-        try:
-            dict_sort={
-                "average_rating" : "-filtering"
-            }
-            filtering = request.GET.get("filtering", None)
-            restaurants = Restaurant.objects.annotate(filtering=Avg("review__rating")).order_by(dict_sort[filtering])
-            
-            restaurant_list = []
-            
-            for restaurant in restaurants: 
-                restaurant_list.append({
-                    "sub_category"      : restaurant.sub_category.name,
-                    "category"          : restaurant.sub_category.category.name,
-                    "restaurant_name"   : restaurant.name,
-                    "address"           : restaurant.address,
-                    "rating"            : round(restaurant.filtering, 1),
-                    "image"             : restaurant.foods.all()[0].images.all()[0].image_url,
-                    "restaurant_id"     : restaurant.id
-                })
-
-            return JsonResponse({"message":"SUCCESS", "result":restaurant_list[:5]}, status=200)
-
-        except Restaurant.DoesNotExist:
-            return JsonResponse({"message":"RESTAURANT_NOT_EXIST"}, status=404)
+from restaurants.models     import Restaurant, Food, SubCategory, Image
+from users.utils            import ConfirmUser, LooseConfirmUser
+from users.models           import Review
 
 
 class RestaurantDetailView(View):
     @LooseConfirmUser
     def get(self, request, restaurant_id):
         try:
-            restaurant         = Restaurant.objects.filter(id=restaurant_id).annotate(
-                rating_total   = Count("review"),
-                rating_one     = Count("review", filter=Q(review__rating=1)),
-                rating_two     = Count("review", filter=Q(review__rating=2)),
-                rating_three   = Count("review", filter=Q(review__rating=3)),
-                rating_four    = Count("review", filter=Q(review__rating=4)),
-                rating_five    = Count("review", filter=Q(review__rating=5)),
-                average_rating = Avg("review__rating")
+            restaurant         = Restaurant.objects.select_related("sub_category").prefetch_related("foods").filter(id=restaurant_id).annotate(
+                rating_total   = Count("reviews"),
+                rating_one     = Count("reviews", filter=Q(reviews__rating=1)),
+                rating_two     = Count("reviews", filter=Q(reviews__rating=2)),
+                rating_three   = Count("reviews", filter=Q(reviews__rating=3)),
+                rating_four    = Count("reviews", filter=Q(reviews__rating=4)),
+                rating_five    = Count("reviews", filter=Q(reviews__rating=5)),
+                average_rating = Avg("reviews__rating"),
                 )[0]
             average_price      = restaurant.foods.aggregate(Avg("price"))["price__avg"]
             is_wished          = request.user.wishlist_restaurants.filter(id=restaurant_id).exists() if request.user else False
@@ -63,7 +38,7 @@ class RestaurantDetailView(View):
             "open_time"      : restaurant.open_time,
             "updated_at"     : restaurant.updated_at,
             "is_wished"      : is_wished,
-            "review_count"   : {
+            "reviews_count"   : {
                 "total"        : restaurant.rating_total,
                 "rating_one"   : restaurant.rating_one,
                 "rating_two"   : restaurant.rating_two,
@@ -83,58 +58,11 @@ class RestaurantDetailView(View):
         except IndexError:
             return JsonResponse({"message":"RESTAURANT_NOT_EXIST"}, status=404)   
 
-class RestaurantReviewView(View):
-    @ConfirmUser
-    def post(self, request, restaurant_id):
-        try:
-            data       = json.loads(request.body)
-            restaurant = Restaurant.objects.get(id=restaurant_id)
-            content    = data["content"]
-            rating     = data["rating"]
-
-            Review.objects.create(
-                user       = request.user,
-                restaurant = restaurant,
-                content    = content,
-                rating     = rating
-            )
-
-            return JsonResponse({"message":"SUCCESS"}, status=201)
-
-        except KeyError:
-            return JsonResponse({"message":"KEY_ERROR"}, status=400)
-        
-        except DataError:
-            return JsonResponse({"message":"DATA_ERROR"}, status=400)
-
-        except Restaurant.DoesNotExist:
-            return JsonResponse({"message":"RESTAURANT_NOT_EXIST"}, status=404)     
-
-    def get(self, request, restaurant_id):
-        offset        = int(request.GET.get("offset", 0))
-        limit         = int(request.GET.get("limit", 10))
-        rating_min    = request.GET.get("rating-min", 1)
-        rating_max    = request.GET.get("rating-max", 5)
-        reviews       = Review.objects.filter(restaurant_id=restaurant_id, rating__gte = rating_min, rating__lte = rating_max).order_by("-created_at")[offset : offset + limit]
-        review_list   = [{
-            "user":{
-                "id"            : review.user.id,
-                "nickname"      : review.user.nickname,
-                "profile_image" : review.user.profile_url,
-                "review_count"  : review.user.reviewed_restaurants.count()
-                },
-                "id"         : review.id,
-                "content"    : review.content,
-                "rating"     : review.rating,
-                "created_at" : review.created_at,
-            } for review in reviews]
-
-        return JsonResponse({"message":"success", "result":review_list}, status=200)
 
 class RestaurantFoodsView(View):
     def get(self, request, restaurant_id):
         try:
-            foods      = Food.objects.filter(restaurant_id=restaurant_id)
+            foods      = Food.objects.prefetch_related("images").filter(restaurant_id=restaurant_id)
             foods_list = [{
                 "id"     : food.id, 
                 "name"   : food.name, 
@@ -147,6 +75,7 @@ class RestaurantFoodsView(View):
         except Restaurant.DoesNotExist:
             return JsonResponse({"message":"RESTAURANT_NOT_EXISTS"}, status=404)
             
+
 class WishListView(View):
     @ConfirmUser
     def post(self, request, restaurant_id):
@@ -178,155 +107,173 @@ class WishListView(View):
         except Restaurant.DoesNotExist:
             return JsonResponse({"message":"RESTAURANT_NOT_EXISTS"}, status=404)
 
-class ReviewView(View):
+
+class RestaurantReviewsView(View):
+    @ConfirmUser
+    def post(self, request, restaurant_id):
+        try:
+            data = json.loads(request.body)
+            Review.objects.create(
+                user          = request.user,
+                restaurant_id = restaurant_id,
+                content       = data["content"],
+                rating        = data["rating"]
+            )
+
+            return JsonResponse({"message":"SUCCESS"}, status=201)
+
+        except KeyError:
+            return JsonResponse({"message":"KEY_ERROR"}, status=400)
+        
+        except DataError:
+            return JsonResponse({"message":"DATA_ERROR"}, status=400)
+
+        except Restaurant.DoesNotExist:
+            return JsonResponse({"message":"RESTAURANT_NOT_EXIST"}, status=404)     
+
+    def get(self, request, restaurant_id):
+        offset        = int(request.GET.get("offset", 0))
+        limit         = int(request.GET.get("limit", 10))
+        rating_min    = request.GET.get("rating-min", 1)
+        rating_max    = request.GET.get("rating-max", 5)
+        reviews       = Review.objects.prefetch_related("user").filter(restaurant_id=restaurant_id, rating__gte = rating_min, rating__lte = rating_max)\
+                                .annotate(review_count=Count("user__reviewed_restaurants")).order_by("-created_at")[offset : offset + limit]
+        review_list   = [{
+            "id"         : review.id,
+            "content"    : review.content,
+            "rating"     : review.rating,
+            "created_at" : review.created_at,
+            "user":{
+                "id"            : review.user.id,
+                "nickname"      : review.user.nickname,
+                "profile_image" : review.user.profile_url,
+                "review_count"  : review.user.reviewed_restaurants.count()
+                },
+            } for review in reviews]
+
+        return JsonResponse({"message":"success", "result":review_list}, status=200)
+
+
+class RestaurantReviewView(View):
     @ConfirmUser
     def patch(self, request, restaurant_id, review_id):
         try:
-            data    = json.loads(request.body)
-            content = data["content"]
-            rating  = data["rating"]
+            data = json.loads(request.body)
 
             if not Review.objects.filter(id=review_id, user_id=request.user.id).exists():
                 return JsonResponse({"message":"REVIEW_NOT_EXISTS"}, status=404)
 
-            Review.objects.filter(id=review_id, user_id=request.user.id).update(content=content, rating=rating, updated_at=timezone.now())
+            Review.objects.filter(id=review_id, user_id=request.user.id).update(content=data["content"], rating=data["rating"], updated_at=timezone.now())
             
-            return JsonResponse({"message":"success"}, status=204)
+            return JsonResponse({"message":"SUCCESS"}, status=204)
             
         except KeyError:
             return JsonResponse({"message":"KEY_ERROR"}, status=400)
 
         except DataError:
             return JsonResponse({"message":"DATA_ERROR"}, status=400)
+    
+    @ConfirmUser
     def delete(self, request, restaurant_id, review_id):
         try:
-            review = Review.objects.get(id=review_id, user_id=request.user.id)
-            review.delete()
+            Review.objects.get(id=review_id, user_id=request.user.id).delete()
 
-            return JsonResponse({"message":"success"}, status=204)
+            return JsonResponse({"message":"SUCCESS"}, status=204)
 
         except DataError:
             return JsonResponse({"message":"DATA_ERROR"}, status=400)
 
         except Review.DoesNotExist:
             return JsonResponse({"message":"REVIEW_NOT_EXISTS"}, status=404)
-            
-class SubCategoryListView(View):
+
+
+class SubCategoriesView(View):
     def get(self, request):
         try:
-            subcategorys = SubCategory.objects.all()
-                    
-            subcategory_list = []
-            for subcategory in subcategorys:                            
-                subcategory_list.append({
-                    "sub_category" : subcategory.id,
-                    "image" : subcategory.restaurant.first().foods.first().images.first().image_url
-                })
+            subcategories = SubCategory.objects.prefetch_related(
+                Prefetch(
+                    lookup="restaurant",
+                    queryset=Restaurant.objects.prefetch_related(
+                        Prefetch(
+                            lookup="foods",
+                            queryset=Food.objects.prefetch_related(
+                                Prefetch(
+                                    lookup="images",
+                                    queryset=Image.objects.all(),
+                                    to_attr="all_images"
+                            )),
+                            to_attr="all_foods"
+                    )), 
+                    to_attr="all_restaurants"
+            ))
 
-            return JsonResponse({"message":"success", "result":subcategory_list}, status=200)
+            result = [{
+                "id" : subcategory.id,
+                "name" : subcategory.name,
+                "image" : subcategory.all_restaurants[0].all_foods[0].all_images[0].image_url,
+            }for subcategory in subcategories]
 
-        except SubCategory.DoesNotExist:
-            return JsonResponse({"message":"sub_category_NOT_EXIST"}, status=404)
-
-class RestaurantView(View):
-    def get(self, request):
-        try:
-            ordering        = request.GET.get("ordering", None)
-            sub_category    = int(request.GET.get("sub_category_id", None))
-
-            if sub_category:
-                restaurants = Restaurant.objects.filter(sub_category_id=sub_category).annotate(average_rating=Avg("review__rating")).order_by("-"+ordering)
-
-            else:
-                restaurants = Restaurant.objects.annotate(average_rating=Avg("review__rating")).order_by("-"+ordering)
-
-            restaurant_list = []
-
-            for restaurant in restaurants:
-                restaurant_list.append({
-                        "name"          : restaurant.name,
-                        "address"       : restaurant.address,
-                        "content"       : restaurant.review_set.order_by('?')[0].content,
-                        "profile_url"   : restaurant.review_set.order_by('?')[0].user.profile_url,
-                        "nickname"      : restaurant.review_set.order_by('?')[0].user.nickname,
-                        "image"         : restaurant.foods.all()[0].images.all()[0].image_url,
-                        "rating"        : round(restaurant.average_rating, 1),
-                        "restaurant_id" : restaurant.id
-                    })          
-
-            return JsonResponse({"message":"success", "result":restaurant_list[:5]}, status=200)
+            return JsonResponse({
+                "message" : "SUCCESS",
+                "result"  : result
+                }, status=200)
 
         except Restaurant.DoesNotExist:
             return JsonResponse({"message":"RESTAURANT_NOT_EXIST"}, status=404)
 
 
-class FilteringView(View):
+class RestaurantsView(View):
     def get(self, request):
-        sorted_dict ={
-            "rating_sort":"-average_rating",
-            "review_count":"-review_counts"
+        sorted_dict     = {
+            "rating"       : "-average_rating",
+            "review_count" : "-reviews_counts"
         }
+        keyword         = request.GET.get('keyword', None)
+        offset          = int(request.GET.get('offset', 0))
+        limit           = int(request.GET.get('limit', 6))
+        sort            = request.GET.get("sort", "rating")
+        sub_categories  = request.GET.getlist("subCategory", None)
 
-        keyword = request.GET.getlist('keyword', None)
-        offset  = int(request.GET.get('offset', 0))
-        limit   = int(request.GET.get('limit', 6))
-        sort    = request.GET.get("sort", "rating_sort")
-        renew  = request.GET.get("renew", None)
-        
-        q = Q()
-        if keyword:
-            q &= Q(name__in = keyword)
+        try:
+            q = Q()
 
-        category_restaurants        = Restaurant.objects.filter(sub_category__category__name__in=keyword).annotate(average_rating=Avg('review__rating'), review_counts=Count('review')).order_by(sorted_dict[sort])[offset:offset+limit]
-        sub_category_restaurants    = Restaurant.objects.filter(sub_category__name__in=keyword).annotate(average_rating=Avg('review__rating'), review_counts=Count('review'))[offset:offset+limit]
-        restaurants                 = Restaurant.objects.filter(q).annotate(average_rating=Avg('review__rating'), review_counts=Count('review'))[offset:offset+limit]
-        
+            if keyword:
+                q &= Q(name__contains = keyword) | Q(sub_category__name = keyword) | Q(sub_category__category__name = keyword)
 
-        if renew == "review_count":
-            Restaurant.objects.filter(sub_category__category__name__in=keyword).order_by(sorted_dict[renew])[offset:offset+limit]
-            Restaurant.objects.filter(sub_category__name__in=keyword).order_by(sorted_dict[renew])[offset:offset+limit]
-            Restaurant.objects.filter(q).order_by(sorted_dict[renew])[offset:offset+limit]
+            if sub_categories:
+                for sub_category in sub_categories:
+                    q |= Q(sub_category__name__contains = sub_category)
 
-        category_result = [{
-            "restaurantID"          : category_restaurant.id,
-            "restaurantName"        : category_restaurant.name,
-            "restaurantAddress"     : category_restaurant.address,
-            "restaurantPhoneNum"    : category_restaurant.phone_number,
-            "restaurantCoordinate"  : category_restaurant.coordinate,
-            "restaurantOpenTime"    : category_restaurant.open_time,
-            "food_image_url"        : Image.objects.filter(food__id = category_restaurant.foods.first().id).first().image_url,
-            "average_rating"        : category_restaurant.average_rating,
-            "review_count"          : category_restaurant.review_counts,
-        }for category_restaurant in category_restaurants]
+            restaurants = Restaurant.objects.filter(q).prefetch_related(
+                Prefetch(
+                    lookup="foods",
+                    queryset=Food.objects.prefetch_related(
+                        Prefetch(
+                            lookup="images",
+                            queryset=Image.objects.all(),
+                            to_attr="all_images"
+                    )),
+                    to_attr="all_foods"
+            )).annotate(
+                average_rating=Avg('reviews__rating'),
+                reviews_counts=Count('reviews')
+            ).order_by(sorted_dict[sort])[offset:offset+limit]
 
-        sub_category_result=[{
-            "restaurantID"          : sub_category_restaurant.id,
-            "restaurantName"        : sub_category_restaurant.name,
-            "restaurantAddress"     : sub_category_restaurant.address,
-            "restaurantPhoneNum"    : sub_category_restaurant.phone_number,
-            "restaurantCoordinate"  : sub_category_restaurant.coordinate,
-            "restaurantOpenTime"    : sub_category_restaurant.open_time,
-            "food_image_url"        : Image.objects.filter(food__id = sub_category_restaurant.foods.first().id).first().image_url,
-            "average_rating"        : sub_category_restaurant.average_rating,
-            "review_count"          : sub_category_restaurant.review_counts,
-        }for sub_category_restaurant in sub_category_restaurants]
-
-        restaurant_result=[{
-            "restaurantID"          : restaurant.id,
-            "restaurantName"        : restaurant.name,
-            "restaurantAddress"     : restaurant.address,
-            "restaurantPhoneNum"    : restaurant.phone_number,
-            "restaurantCoordinate"  : restaurant.coordinate,
-            "restaurantOpenTime"    : restaurant.open_time,
-            "food_image_url"        : Image.objects.filter(food__id = restaurant.foods.first().id).first().image_url,
-            "average_rating"        : restaurant.average_rating,
-            "review_count"          : restaurant.review_counts,
-        }for restaurant in restaurants]
-
-        return JsonResponse({
-            "category_result"       :category_result,
-            "sub_category_result"   :sub_category_result,
-            "restaurant_result"     :restaurant_result
+            return JsonResponse({
+                "ok"        : True,
+                "message"   : "SUCCESS",
+                "result"    : [{
+                    "restaurantID"          : restaurant.id,
+                    "restaurantName"        : restaurant.name,
+                    "restaurantAddress"     : restaurant.address,
+                    "restaurantPhoneNum"    : restaurant.phone_number,
+                    "restaurantCoordinate"  : restaurant.coordinate,
+                    "restaurantOpenTime"    : restaurant.open_time,
+                    "foodImageUrl"          : restaurant.all_foods[0].all_images[0].image_url,
+                    "averageRating"         : restaurant.average_rating,
+                    "reviewCount"           : restaurant.reviews_counts,
+                }for restaurant in restaurants]
             }, status=200)
-
-
+        
+        except JSONDecodeError:
+            return JsonResponse({"ok" : False, "message" : "JsonDecodeError"}, status=400)
